@@ -1,0 +1,47 @@
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      AWS_ACCOUNT_ID:
+        required: true
+        type: string
+      AWS_REGION:
+        required: true
+        type: string
+      ECR_REPOSITORY:
+        required: true
+        type: string
+      IMAGE_TAG:
+        required: true
+        type: string
+      CODEGEN_DIR:
+        required: true
+        type: string
+    secrets:
+      AWS_ACCESS_KEY_ID: {}
+      AWS_SECRET_ACCESS_KEY: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Verify Dockerfile
+      run: |
+        if [ ! -f ${{ inputs.CODEGEN_DIR }}/Dockerfile ]; then
+          echo "::error::Dockerfile not found in ${{ inputs.CODEGEN_DIR }}!"
+          exit 1
+        fi
+    - uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ inputs.AWS_REGION }}
+    - uses: aws-actions/amazon-ecr-login@v2
+      id: login-ecr
+    - name: Build and push
+      run: |
+        IMAGE_URI="${{ inputs.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.AWS_REGION }}.amazonaws.com/${{ inputs.ECR_REPOSITORY }}:${{ inputs.IMAGE_TAG }}"
+        docker build -t $IMAGE_URI -f ${{ inputs.CODEGEN_DIR }}/Dockerfile ${{ inputs.CODEGEN_DIR }}
+        docker push $IMAGE_URI

@@ -1,0 +1,71 @@
+name: Semgrep Scan
+
+on:
+  workflow_call:
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest 
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run Semgrep
+      id: scan
+      run: |
+        docker run --rm -v ${{ github.workspace }}:/src returntocorp/semgrep:latest \
+          semgrep scan \
+          --config=auto \
+          --config=p/security-audit \
+          --config=p/secrets \
+          --config=p/ci \
+          --include="**/*.go" \
+          --include="go.mod" \
+          --include="go.sum" \
+          --json > semgrep_results.json
+        
+        if jq -e '.results | length > 0' semgrep_results.json > /dev/null; then
+          echo "::error::Semgrep found security issues"
+          echo "SCAN_FAILED=true" >> $GITHUB_ENV
+          exit 1
+        fi
+    - name: Post results  
+      if: always()
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const fs = require('fs');
+          let results = {results:[]};
+          try {
+            results = JSON.parse(fs.readFileSync('semgrep_results.json', 'utf8'));
+          } catch (error) {}
+          
+          const comment = `## Semgrep Security Scan Results
+          ${results.results.length ? '⚠️ **Security Issues Found**' : '✅ **No Security Issues Found**'}
+          
+          ${results.results.map(r => `
+          ### ${r.check_id}
+          - **File**: \`${r.path}\`
+          - **Line**: ${r.start.line}
+          - **Issue**: ${r.extra.message}
+          - **Impact**: ${r.extra.metadata?.impact || 'Potential security vulnerability'}
+          - **Confidence**: ${r.extra.metadata?.confidence || 'Unknown'}
+          
+          **Description**:
+          ${r.extra.metadata?.description || r.extra.message}
+          
+          **Recommendation**:
+          ${r.extra.metadata?.fix || 'Review and fix the identified security issue according to best practices'}
+          
+          `).join('\n')}
+          
+          ${results.results.length ? '### 🛡️ Best Practices\n' +
+          '- Follow secure coding guidelines\n' +
+          '- Implement proper input validation\n' +
+          '- Use security-focused code reviews\n' +
+          '- Keep security dependencies updated' : ''}`;
+          
+          await github.rest.issues.createComment({
+            ...context.repo,
+            issue_number: context.issue.number,
+            body: comment
+          });

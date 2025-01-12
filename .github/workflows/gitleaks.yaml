@@ -1,0 +1,57 @@
+name: Gitleaks Scan
+
+on:
+  workflow_call:
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run Gitleaks
+      run: |
+        docker run --rm -v ${{ github.workspace }}:/workspace zricethezav/gitleaks:latest detect \
+          --source /workspace \
+          --report-format json \
+          --report-path /workspace/gitleaks_results.json
+        
+        if [ -s gitleaks_results.json ]; then
+          echo "::warning::Gitleaks found potential secrets"
+          echo "SCAN_FAILED=true" >> $GITHUB_ENV
+        fi
+    - name: Post results
+      if: always()
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const fs = require('fs');
+          let results = [];
+          try {
+            results = JSON.parse(fs.readFileSync('gitleaks_results.json', 'utf8'));
+          } catch (error) {} 
+          
+          const comment = `## Gitleaks Security Scan Results
+          ${results.length ? '⚠️ **Secrets Found**' : '✅ **No Secrets Found**'}
+          
+          ${results.map(r => `
+          ### Secret detected in \`${r.File}\`
+          - **Location**: Line ${r.StartLine}
+          - **Rule Violated**: ${r.Rule}
+          - **Description**: ${r.Description || 'Potential secret or credential found'}
+          - **Recommendation**: Remove the secret and store it securely in environment variables or a secrets manager
+          - **Matched Content**: \`${r.Match}\`
+          
+          `).join('\n')}
+          
+          ${results.length ? '### 🔒 Best Practices\n' +
+          '- Never commit secrets, credentials or sensitive data\n' +
+          '- Use environment variables or secret management tools\n' +
+          '- Add sensitive patterns to .gitignore\n' +
+          '- Consider using pre-commit hooks to prevent secret commits' : ''}`;
+          
+          await github.rest.issues.createComment({
+            ...context.repo,
+            issue_number: context.issue.number,
+            body: comment
+          });
